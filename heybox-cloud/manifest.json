@@ -1,0 +1,24 @@
+{
+  "upstreamCommit": "dde82466d3b02aae38c220343443ad8e958c481a",
+  "files": {
+    "entry.mjs": "346a14117883885a6571ee6c415616c6e93eee3a9cd6cc698000ee6ced25e741",
+    "LICENSE": "6578a105c08a8b37d74ef8c94272e2650e6ff25e6fdae3b0b41e288b0501989b",
+    "mail_support.py": "272a38c33a6e740cc7ff042efbe205766f32959bb3fca10f3c1081d0a5c14805",
+    "NOTICE.md": "1ebeff70df5f83e46ef3a7c055d8417cb3cda0aa2e8422eb31e4149b754127ce",
+    "notify.py": "b5e924c0c183b9ee80efd9abf0597270b215a2f273fad1ecaddbdd7a6c2efa51",
+    "package.json": "84e4b6b7e04e0514f16d1366d07b6791b6bfdcd34a025c6d56f5b01cf08efe82",
+    "policy.mjs": "fd7dfd67ed745678f4463b355664737882584f2a21771fd477f5aa1987670b9b",
+    "PROVENANCE.json": "08bd8a96ac0f589a6165c90e30ae0b1a47197c36b28ba0d1707ff867e56b0e84",
+    "runtime/client.js": "56e188faedd5703629ab558a538b3c2048febc51d5c707d9959b9669f6def118",
+    "runtime/config.js": "476372747543390449cce03cc7e10dd490ec301cbdfde747bf9093861478af99",
+    "runtime/native-algorithm.js": "615ad6c765b28daae02bf12d9afdc3638baa295ac15257c698cdfb431c0fcd64",
+    "runtime/native.js": "5c36e5e2042a564398baa53a021d849287845d7fa65e0b278f331979c6e2a68f",
+    "runtime/profile.js": "0af34496bdb7ecf4888f1054f29a8a75918b0852ef917baf4a7172497d46eb2a",
+    "runtime/report.js": "13a207e51c52f4ad724d40546a9768365cffa222d1370f418f7ec05e0f18f3b6",
+    "runtime/sign-diagnostics.js": "b60d954a0ccdea2ebe4b626aacbd2d4e9d130a6ff6dfc494c4671d2e7cb2ceb2",
+    "runtime/signature.js": "0e56c30f2aec00d8da269b00587a0fefef71e1bbec3e486f0af2395024526740",
+    "runtime/tasks.js": "9d7b531e032ead2794a0f5a878b1e0a0e4c6809c359d118bfb048dc4f16ce33a",
+    "verify.mjs": "c5a3c02e56b8520f5d4156dfb1b004239f3b7d28a20f9167bda2b3a8c2e865dd",
+    "worker.mjs": "79b4cab66f906fd20da9a06cf54a82a5a103ebca32bdacf49832e8ece3ddaf72"
+  }
+}

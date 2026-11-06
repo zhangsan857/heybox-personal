@@ -1,0 +1,16 @@
+{
+  "upstream": "https://github.com/Cansiny0320/heybox-daily",
+  "commit": "dde82466d3b02aae38c220343443ad8e958c481a",
+  "compiledRuntime": {
+    "client.js": "56e188faedd5703629ab558a538b3c2048febc51d5c707d9959b9669f6def118",
+    "config.js": "476372747543390449cce03cc7e10dd490ec301cbdfde747bf9093861478af99",
+    "tasks.js": "9d7b531e032ead2794a0f5a878b1e0a0e4c6809c359d118bfb048dc4f16ce33a",
+    "native.js": "5c36e5e2042a564398baa53a021d849287845d7fa65e0b278f331979c6e2a68f",
+    "native-algorithm.js": "615ad6c765b28daae02bf12d9afdc3638baa295ac15257c698cdfb431c0fcd64",
+    "report.js": "13a207e51c52f4ad724d40546a9768365cffa222d1370f418f7ec05e0f18f3b6",
+    "signature.js": "0e56c30f2aec00d8da269b00587a0fefef71e1bbec3e486f0af2395024526740",
+    "profile.js": "0af34496bdb7ecf4888f1054f29a8a75918b0852ef917baf4a7172497d46eb2a",
+    "sign-diagnostics.js": "b60d954a0ccdea2ebe4b626aacbd2d4e9d130a6ff6dfc494c4671d2e7cb2ceb2"
+  },
+  "buildNote": "Copied from the already compiled, source-hash-verified stage 2 TypeScript build. Daily-task import closure uses only Node built-ins. Login stays local."
+}
