@@ -1,0 +1,214 @@
+name: 第五阶段 QQ 邮箱通知自测
+run-name: "QQ 通知自测 - ${{ inputs.scenario }} - ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: '测试场景：success=模拟成功；failure=模拟登录失效'
+        required: true
+        type: choice
+        default: success
+        options:
+          - success
+          - failure
+
+permissions: {}
+
+concurrency:
+  group: heybox-mail-selftest
+  cancel-in-progress: false
+
+jobs:
+  mail-test:
+    name: 发送一封模拟通知邮件
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Test QQ SMTP notification
+        shell: bash
+        env:
+          TEST_SCENARIO: ${{ inputs.scenario }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          PYTHONUNBUFFERED: '1'
+        run: |
+          python3 - <<'PY'
+          """Manual, mail-only self-test. Uses only the Python standard library."""
+          
+          import os
+          import re
+          import smtplib
+          import ssl
+          from dataclasses import dataclass
+          from datetime import datetime, timedelta, timezone
+          from email.headerregistry import Address
+          from email.message import EmailMessage
+          from email.utils import format_datetime, make_msgid
+          
+          REPOSITORY = "zhangsan857/heybox-personal"
+          BEIJING = timezone(timedelta(hours=8))
+          
+          
+          class TestConfigurationError(Exception):
+              pass
+          
+          
+          class SimulatedAuthExpired(Exception):
+              pass
+          
+          
+          @dataclass(frozen=True, repr=False)
+          class MailConfig:
+              user: str
+              password: str
+              recipient: str
+          
+          
+          def required(environ, name):
+              value = str(environ.get(name, "")).strip()
+              if not value:
+                  raise TestConfigurationError("SECRET_MISSING_" + name)
+              return value
+          
+          
+          def read_config(environ):
+              user = required(environ, "SMTP_USER")
+              password = required(environ, "SMTP_PASS")
+              recipient = required(environ, "MAIL_TO")
+              address = r"[A-Za-z0-9][A-Za-z0-9._+\-]{0,127}@qq\.com"
+              if not re.fullmatch(address, user, flags=re.IGNORECASE):
+                  raise TestConfigurationError("SMTP_USER_FORMAT_INVALID")
+              if not re.fullmatch(address, recipient, flags=re.IGNORECASE):
+                  raise TestConfigurationError("MAIL_TO_FORMAT_INVALID")
+              if user.casefold() != recipient.casefold():
+                  raise TestConfigurationError("SELF_MAIL_ADDRESSES_DIFFER")
+              if not re.fullmatch(r"[!-~]{8,256}", password):
+                  raise TestConfigurationError("SMTP_PASS_FORMAT_INVALID")
+              return MailConfig(user, password, recipient)
+          
+          
+          def read_context(environ):
+              if environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+                  raise TestConfigurationError("MANUAL_EVENT_REQUIRED")
+              if environ.get("GITHUB_REPOSITORY") != REPOSITORY:
+                  raise TestConfigurationError("REPOSITORY_MISMATCH")
+              if environ.get("GITHUB_REF") != "refs/heads/main":
+                  raise TestConfigurationError("MAIN_BRANCH_REQUIRED")
+              scenario = environ.get("TEST_SCENARIO")
+              if scenario not in {"success", "failure"}:
+                  raise TestConfigurationError("SCENARIO_INVALID")
+              run_id = str(environ.get("GITHUB_RUN_ID", ""))
+              attempt = str(environ.get("GITHUB_RUN_ATTEMPT", ""))
+              if not re.fullmatch(r"[1-9][0-9]{0,23}", run_id) or not re.fullmatch(r"[1-9][0-9]{0,5}", attempt):
+                  raise TestConfigurationError("RUN_CONTEXT_INVALID")
+              return {"scenario": scenario, "test_id": f"{run_id}.{attempt}",
+                      "url": f"https://github.com/{REPOSITORY}/actions/runs/{run_id}"}
+          
+          
+          def simulate_result(scenario):
+              try:
+                  if scenario == "failure":
+                      raise SimulatedAuthExpired("APP_AUTH_EXPIRED")
+                  if scenario != "success":
+                      raise TestConfigurationError("SCENARIO_INVALID")
+                  return {"ok": True, "code": "SIMULATED_SUCCESS"}
+              except SimulatedAuthExpired:
+                  return {"ok": False, "code": "APP_AUTH_EXPIRED"}
+          
+          
+          def compose_message(config, context, result, now=None):
+              current = (now or datetime.now(BEIJING)).astimezone(BEIJING)
+              outcome = "成功" if result["ok"] else "失败"
+              message = EmailMessage()
+              message["From"] = Address("小黑盒个人通知", addr_spec=config.user)
+              message["To"] = Address(addr_spec=config.recipient)
+              message["Subject"] = f"[小黑盒][通知自测][{outcome}] 编号 {context['test_id']}"
+              message["Date"] = format_datetime(current)
+              message["Message-ID"] = make_msgid(domain="heybox-personal.invalid")
+              lines = [
+                  "这是一封模拟结果的通知测试邮件。",
+                  "本次未连接真实小黑盒账号，未执行签到或分享，也未更改任何登录凭据。",
+                  "",
+                  f"测试编号：{context['test_id']}",
+                  f"北京时间：{current.strftime('%Y-%m-%d %H:%M:%S')} +08:00",
+                  f"测试场景：{context['scenario']}",
+                  f"模拟结果：{outcome}",
+                  f"结果代码：{result['code']}",
+              ]
+              if result["ok"]:
+                  lines.extend(["", "模拟任务状态：", "签到：模拟已完成", "分享帖子：模拟已完成",
+                                "分享游戏：模拟已完成", "分享游戏评价：模拟已完成",
+                                "这些状态来自测试数据，不代表又执行了一轮真实任务。"])
+              else:
+                  lines.extend(["", "本次用模拟异常验证失败通知，真实账号是否过期仍需单独只读检查。",
+                                "将来遇到真实 APP_AUTH_EXPIRED 时：",
+                                "1. 在自己的电脑上重新授权目标小黑盒账号。",
+                                "2. 先只读核验，再按部署说明更新保存的登录凭据。",
+                                "3. 确认恢复后再继续自动任务，避免反复请求短信。"])
+              lines.extend(["", "本次 GitHub 运行记录：", context["url"], "",
+                            "收到本邮件只证明本次邮件通道可用。正式任务通知和定时执行尚待后续接入。"])
+              message.set_content("\n".join(lines))
+              return message
+          
+          
+          def send_notice(config, message, smtp_factory=None):
+              factory = smtp_factory or smtplib.SMTP_SSL
+              context = ssl.create_default_context()
+              context.minimum_version = ssl.TLSVersion.TLSv1_2
+              with factory("smtp.qq.com", 465, timeout=20, context=context) as smtp:
+                  smtp.set_debuglevel(0)
+                  smtp.login(config.user, config.password)
+                  refused = smtp.send_message(message, from_addr=config.user, to_addrs=[config.recipient])
+                  if refused:
+                      raise TestConfigurationError("MAIL_RECIPIENT_REJECTED")
+          
+          
+          def safe_error(error):
+              if isinstance(error, TestConfigurationError):
+                  known = {"SECRET_MISSING_SMTP_USER", "SECRET_MISSING_SMTP_PASS", "SECRET_MISSING_MAIL_TO",
+                           "SMTP_USER_FORMAT_INVALID", "MAIL_TO_FORMAT_INVALID", "SELF_MAIL_ADDRESSES_DIFFER",
+                           "SMTP_PASS_FORMAT_INVALID", "MANUAL_EVENT_REQUIRED", "REPOSITORY_MISMATCH",
+                           "MAIN_BRANCH_REQUIRED", "SCENARIO_INVALID", "RUN_CONTEXT_INVALID", "MAIL_RECIPIENT_REJECTED"}
+                  return str(error) if str(error) in known else "MAIL_TEST_CONFIG_INVALID"
+              if isinstance(error, smtplib.SMTPAuthenticationError):
+                  return "MAIL_AUTH_REJECTED"
+              if isinstance(error, smtplib.SMTPRecipientsRefused):
+                  return "MAIL_RECIPIENT_REJECTED"
+              if isinstance(error, ssl.SSLCertVerificationError):
+                  return "MAIL_TLS_VERIFY_FAILED"
+              if isinstance(error, (TimeoutError, smtplib.SMTPServerDisconnected)):
+                  return "MAIL_DELIVERY_NOT_CONFIRMED"
+              if isinstance(error, smtplib.SMTPResponseException):
+                  code = error.smtp_code
+                  return f"MAIL_SMTP_REJECTED_{code}" if isinstance(code, int) and 100 <= code <= 599 else "MAIL_SMTP_REJECTED"
+              if isinstance(error, OSError):
+                  return "MAIL_CONNECTION_FAILED"
+              return "MAIL_TEST_UNEXPECTED_ERROR"
+          
+          
+          def main(environ=None, smtp_factory=None, emit=print, now=None):
+              try:
+                  environment = os.environ if environ is None else environ
+                  context = read_context(environment)
+                  config = read_config(environment)
+                  result = simulate_result(context["scenario"])
+                  message = compose_message(config, context, result, now)
+                  emit("TEST_SCENARIO=" + context["scenario"])
+                  emit("TEST_ID=" + context["test_id"])
+                  emit("SIMULATED_RESULT=" + ("success" if result["ok"] else "failure"))
+                  send_notice(config, message, smtp_factory)
+                  emit("MAIL_SMTP_ACCEPTED")
+                  emit("请到自己的QQ邮箱核对邮件主题和测试编号，实际收件后再记为通过。")
+                  return 0
+              except Exception as error:
+                  # Do not log raw SMTP replies, addresses, credentials or exception traces.
+                  emit("MAIL_TEST_ERROR=" + safe_error(error))
+                  emit("请按第五阶段明细排查。投递状态不明时先查邮箱，不自动重发。")
+                  return 2
+          
+          
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          PY
