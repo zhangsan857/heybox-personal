@@ -1,0 +1,102 @@
+"""Healthchecks reporting only; never reads the Heybox or SMTP credentials."""
+import os
+import re
+import ssl
+from urllib.parse import urlsplit
+from urllib.request import Request, build_opener, HTTPSHandler, HTTPRedirectHandler
+
+
+class MonitorError(Exception):
+    pass
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise MonitorError("MONITOR_REDIRECT_DENIED")
+
+
+def valid_url(value):
+    text = str(value or "").strip()
+    if not text:
+        raise MonitorError("MONITOR_URL_MISSING")
+    try:
+        parsed = urlsplit(text)
+        if parsed.scheme != "https" or parsed.netloc.lower() != "hc-ping.com" or parsed.query or parsed.fragment:
+            raise ValueError()
+        if not re.fullmatch(r"/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", parsed.path):
+            raise ValueError()
+    except Exception:
+        raise MonitorError("MONITOR_URL_INVALID") from None
+    return "https://hc-ping.com" + parsed.path
+
+
+def validate_context(env):
+    if env.get("GITHUB_REPOSITORY") != "zhangsan857/heybox-personal" or env.get("GITHUB_REF") != "refs/heads/main" or env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+        raise MonitorError("MONITOR_CONTEXT_DENIED")
+
+
+def ping(base, signal, opener=None):
+    url = valid_url(base)
+    if signal not in {"success", "failure"}:
+        raise MonitorError("MONITOR_SIGNAL_INVALID")
+    if signal == "failure":
+        url += "/fail"
+    client = opener or build_opener(NoRedirect(), HTTPSHandler(context=ssl.create_default_context()))
+    request = Request(url, data=b"", method="POST")
+    with client.open(request, timeout=10) as response:
+        if response.status != 200 or response.read(64).strip() != b"OK":
+            raise MonitorError("MONITOR_ACK_INVALID")
+
+
+def task_signal(env):
+    # A read-only check, drill, or SMTP-only success cannot mark the daily job healthy.
+    if env.get("MONITOR_ENABLED") != "true" or env.get("CLOUD_MODE") != "run":
+        return None
+    return "success" if env.get("TASK_OUTCOME") == "success" and env.get("MAIL_OUTCOME") == "success" and env.get("TASK_OK") == "true" else "failure"
+
+
+def safe_monitor_error(error):
+    allowed = {"MONITOR_URL_MISSING", "MONITOR_URL_INVALID", "MONITOR_SIGNAL_INVALID", "MONITOR_CONTEXT_DENIED", "MONITOR_REDIRECT_DENIED",
+               "MONITOR_ACK_INVALID", "MONITOR_TEST_URL_CONFLICT", "MONITOR_PROBE_ACTION_INVALID"}
+    return str(error) if isinstance(error, MonitorError) and str(error) in allowed else "MONITOR_DELIVERY_NOT_CONFIRMED"
+
+
+def main(environ=None, opener=None, emit=print):
+    env = os.environ if environ is None else environ
+    try:
+        signal = task_signal(env)
+        if signal is None:
+            emit("MONITOR_SKIPPED")
+            return 0
+        validate_context(env)
+        ping(env.get("HC_PING_URL"), signal, opener)
+        emit("MONITOR_SIGNAL=" + signal)
+        emit("MONITOR_REPORTED")
+        return 0
+    except Exception as error:
+        emit("MONITOR_ERROR=" + safe_monitor_error(error))
+        return 2
+
+
+def probe_main(environ=None, opener=None, emit=print):
+    env = os.environ if environ is None else environ
+    try:
+        validate_context(env)
+        if env.get("PROBE_ACTION") not in {"arm", "recover"}:
+            raise MonitorError("MONITOR_PROBE_ACTION_INVALID")
+        test_url = valid_url(env.get("HC_TEST_PING_URL"))
+        live_url = valid_url(env.get("HC_PING_URL"))
+        if test_url.casefold() == live_url.casefold():
+            raise MonitorError("MONITOR_TEST_URL_CONFLICT")
+        # Deliberately ping once. No timer or repeated ping hides the subsequent missed deadline.
+        ping(test_url, "success", opener)
+        emit("MONITOR_PROBE=" + env["PROBE_ACTION"])
+        emit("MONITOR_PROBE_REPORTED")
+        return 0
+    except Exception as error:
+        emit("MONITOR_ERROR=" + safe_monitor_error(error))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

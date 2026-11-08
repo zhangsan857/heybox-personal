@@ -127,7 +127,7 @@ def compose(config, ctx, result, now=None):
             lines.append("在本机重新授权并只读核验后，更新GitHub的HEYBOX_CONFIG_B64 Secret，再用check模式确认恢复。")
         if result["error"] == "CLOUD_SETUP_FAILED":
             lines.append("请查看运行链接中检出代码、设置Node或校验上传包的首次失败步骤。")
-    lines.extend(["", "运行记录：", ctx["url"], "", "本阶段仍为手动运行，正式15:00定时尚未启用。"])
+    lines.extend(["", "运行记录：", ctx["url"], "", "本运行可由网页手动启动或外部定时触发。15:00计划与漏跑监测请在调度站和Healthchecks中核对。"])
     message.set_content("\n".join(lines))
     return message
 
