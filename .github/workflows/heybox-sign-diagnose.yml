@@ -1,0 +1,171 @@
+name: 小黑盒签到诊断
+run-name: "签到诊断 - ${{ inputs.mode }} - ${{ github.run_number }}"
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'inspect=只读；attempt=最多提交一次签到并记录脱敏状态'
+        type: choice
+        required: true
+        default: inspect
+        options: [inspect, attempt]
+      confirm:
+        description: 'attempt模式填写SIGN_DIAG'
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: heybox-personal-account
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    name: 签到状态诊断
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout personal repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Set up Node 24
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - name: Inspect check-in state
+        env:
+          DIAG_MODE: ${{ inputs.mode }}
+          DIAG_CONFIRM: ${{ inputs.confirm }}
+          HEYBOX_CONFIG_B64: ${{ secrets.HEYBOX_CONFIG_B64 }}
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { setTimeout as sleep } from 'node:timers/promises';
+          
+          const states = new Set(['ok', 'ignore', 'normal', 'waiting', 'unsigned', 'signed', 'need_sign', 'not_signed', 'unreceived', 'failed', 'fail', 'error', 'relogin', 'lack_token', 'show_captcha', 'risk', 'forbidden', 'auth', 'network', 'timeout', 'http', 'protocol']);
+          const fields = ['state', 'signed_date', 'sign_date', 'is_signed', 'today_signed', 'description', 'notify_description', 'popup', 'coin', 'sign_in_exp', 'sign_in_coin', 'sign_in_streak'];
+          const hints = { risk: /风控|风险|异常行为|异常操作|安全限制/, captcha: /验证码|人机验证/, limited: /频繁|限制|稍后|重试|繁忙/, login: /登录|令牌|设备/, already: /已签到|已经签到|重复签到/, success: /签到成功|完成签到/, reward: /奖励|领取|到账/ };
+          
+          function object(value) {
+            return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
+          }
+          
+          function integer(value) {
+            if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d{1,13}$/.test(value))) return undefined;
+            const parsed = Number(value);
+            return Number.isSafeInteger(parsed) && parsed >= 0 && parsed < 10 ** 13 ? parsed : undefined;
+          }
+          
+          function state(value) {
+            return states.has(value) ? value : value === undefined ? 'missing' : 'unrecognized';
+          }
+          
+          export function safeSign(value) {
+            const data = object(value);
+            const reward = data.popup ? object(object(data.popup).data) : data;
+            const descriptions = [data.description, data.notify_description].filter(item => typeof item === 'string').join(' ').slice(0, 2000);
+            return {
+              type: value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value,
+              fields: fields.filter(key => Object.hasOwn(data, key)),
+              state: state(data.state),
+              stateType: typeof data.state,
+              signedDate: integer(data.signed_date),
+              signedDateType: typeof data.signed_date,
+              signDate: integer(data.sign_date),
+              isSigned: typeof data.is_signed === 'boolean' ? data.is_signed : undefined,
+              todaySigned: typeof data.today_signed === 'boolean' ? data.today_signed : undefined,
+              rewardExp: integer(reward.sign_in_exp),
+              rewardCoin: integer(reward.sign_in_coin),
+              streak: integer(reward.sign_in_streak),
+              hints: Object.keys(hints).filter(key => hints[key].test(descriptions)),
+            };
+          }
+          
+          export function validateDiagnostic(env) {
+            if (env.GITHUB_REPOSITORY !== 'zhangsan857/heybox-personal' || env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_EVENT_NAME !== 'workflow_dispatch') throw new Error('DIAG_CONTEXT_DENIED');
+            if (!['inspect', 'attempt'].includes(env.DIAG_MODE)) throw new Error('DIAG_MODE_INVALID');
+            if (env.DIAG_MODE === 'attempt' && env.DIAG_CONFIRM !== 'SIGN_DIAG') throw new Error('DIAG_CONFIRM_REQUIRED');
+          }
+          
+          export function diagnosticFetch({ mode, fetchImpl = globalThis.fetch, emit = console.log, now = Date.now }) {
+            const startedDay = Math.floor((now() + 8 * 3600_000) / 86400_000);
+            let calls = 0;
+            let signCalls = 0;
+            return async (input, options = {}) => {
+              const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+              const method = String(options.method || input?.method || 'GET').toUpperCase();
+              if (Math.floor((now() + 8 * 3600_000) / 86400_000) !== startedDay) throw new Error('DIAG_DAY_CHANGED');
+              if (++calls > 12 || method !== 'GET' || url.origin !== 'https://api.xiaoheihe.cn' || url.username || url.password) throw new Error('DIAG_REQUEST_DENIED');
+              const endpoint = url.pathname;
+              if (endpoint === '/task/sign_v3/sign') {
+                if (mode !== 'attempt' || signCalls >= 1) throw new Error('DIAG_SIGN_DENIED');
+                signCalls++;
+              } else if (!['/task/list_v2/', '/task/sign_v4/get_sign_state'].includes(endpoint)) throw new Error('DIAG_REQUEST_DENIED');
+              const response = await fetchImpl(input, { ...options, redirect: 'error' });
+              if (endpoint !== '/task/list_v2/') {
+                let body;
+                try { body = await response.clone().json(); } catch { body = {}; }
+                const api = object(body);
+                const message = typeof api.msg === 'string' ? api.msg.slice(0, 2000) : '';
+                const serverDate = Date.parse(response.headers.get('date') || '');
+                emit('SIGN_DIAG_RESPONSE=' + JSON.stringify({
+                  endpoint: endpoint === '/task/sign_v3/sign' ? 'submit' : 'state',
+                  http: response.status,
+                  apiStatus: state(api.status),
+                  serverDate: Number.isFinite(serverDate) ? new Date(serverDate).toISOString() : undefined,
+                  messageHints: Object.keys(hints).filter(key => hints[key].test(message)),
+                  result: safeSign(api.result),
+                }));
+              }
+              return response;
+            };
+          }
+          
+          export async function diagnose(client, { mode, account, snapshot, signedToday, now = Date.now, wait = sleep, emit = console.log }) {
+            const before = snapshot(await client.tasks(), account);
+            let signState = await client.signState();
+            const tasks = before.tasks.filter(task => ['sign', '1', '19', '31'].includes(task.id)).map(task => ({ id: task.id, state: ['waiting', 'finish'].includes(task.state) ? task.state : 'unrecognized' }));
+            emit('SIGN_DIAG_BEFORE=' + JSON.stringify({ accountMatches: true, expectedDay: Math.floor((now() + 8 * 3600_000) / 86400_000), signedToday: signedToday(signState, now()), tasks }));
+            if (signedToday(signState, now())) {
+              emit('SIGN_DIAG_ALREADY_COMPLETE');
+              return 0;
+            }
+            if (mode === 'inspect') {
+              emit('SIGN_DIAG_INSPECT_COMPLETE');
+              return 0;
+            }
+            await client.sign();
+            for (const delay of [2000, 3000, 5000, 10000]) {
+              await wait(delay);
+              signState = await client.signState();
+              if (signedToday(signState, now())) {
+                snapshot(await client.tasks(), account);
+                emit('SIGN_DIAG_VERIFIED');
+                return 0;
+              }
+            }
+            emit('SIGN_DIAG_NOT_VERIFIED');
+            return 2;
+          }
+          
+          export async function runDiagnostic(env = process.env, emit = console.log) {
+            try {
+              validateDiagnostic(env);
+              const { verifyBundle } = await import('./heybox-cloud/verify.mjs');
+              const { decodeConfig } = await import('./heybox-cloud/worker.mjs');
+              const { HeyboxClient } = await import('./heybox-cloud/runtime/client.js');
+              const { snapshot, signedToday } = await import('./heybox-cloud/runtime/tasks.js');
+              verifyBundle();
+              const config = decodeConfig(env.HEYBOX_CONFIG_B64);
+              const client = new HeyboxClient(config, { fetchImpl: diagnosticFetch({ mode: env.DIAG_MODE, emit }) });
+              return await diagnose(client, { mode: env.DIAG_MODE, account: config.session.heybox_id, snapshot, signedToday, emit });
+            } catch (error) {
+              const message = String(error?.message || '');
+              const code = /^DIAG_[A-Z_]+$/.test(message) || /^CLOUD_[A-Z_]+$/.test(message) ? message : 'DIAG_REQUEST_NOT_CONFIRMED';
+              emit('SIGN_DIAG_ERROR=' + JSON.stringify({ code, category: state(error?.category), status: state(error?.status), http: integer(error?.httpStatus) }));
+              return 2;
+            }
+          }
+          process.exitCode = await runDiagnostic();
+          JS
