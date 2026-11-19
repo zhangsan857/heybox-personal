@@ -101,9 +101,9 @@ jobs:
               if (endpoint === '/task/sign_v3/sign') {
                 if (mode !== 'attempt' || signCalls >= 1) throw new Error('DIAG_SIGN_DENIED');
                 signCalls++;
-              } else if (!['/task/list_v2/', '/task/sign_v4/get_sign_state'].includes(endpoint)) throw new Error('DIAG_REQUEST_DENIED');
+              } else if (!['/task/list_v2/', '/task/sign_v4/get_sign_state', '/store/hcoin/history/'].includes(endpoint)) throw new Error('DIAG_REQUEST_DENIED');
               const response = await fetchImpl(input, { ...options, redirect: 'error' });
-              if (endpoint !== '/task/list_v2/') {
+              if (endpoint !== '/task/list_v2/' && endpoint !== '/store/hcoin/history/') {
                 let body;
                 try { body = await response.clone().json(); } catch { body = {}; }
                 const api = object(body);
@@ -156,9 +156,11 @@ jobs:
               const { decodeConfig } = await import('./heybox-cloud/worker.mjs');
               const { HeyboxClient } = await import('./heybox-cloud/runtime/client.js');
               const { snapshot, signedToday } = await import('./heybox-cloud/runtime/tasks.js');
+              const { readSignHistory } = await import('./heybox-cloud/runtime/sign-diagnostics.js');
               verifyBundle();
               const config = decodeConfig(env.HEYBOX_CONFIG_B64);
               const client = new HeyboxClient(config, { fetchImpl: diagnosticFetch({ mode: env.DIAG_MODE, emit }) });
+              emit('SIGN_DIAG_HISTORY=' + JSON.stringify(await readSignHistory(client, Date.now())));
               return await diagnose(client, { mode: env.DIAG_MODE, account: config.session.heybox_id, snapshot, signedToday, emit });
             } catch (error) {
               const message = String(error?.message || '');
