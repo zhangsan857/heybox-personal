@@ -59,7 +59,81 @@ jobs:
           CLOUD_CONFIRM: ${{ inputs.confirm }}
           HOSTED_PAUSED: ${{ inputs.hosted_paused }}
           HEYBOX_CONFIG_B64: ${{ inputs.mode != 'failure-drill' && secrets.HEYBOX_CONFIG_B64 || '' }}
-        run: node heybox-cloud/entry.mjs
+        run: |
+          cat > "$RUNNER_TEMP/heybox-sign-observer.mjs" <<'JS'
+          
+          const states = new Set(['ok', 'ignore', 'normal', 'waiting', 'unsigned', 'signed', 'need_sign', 'not_signed', 'unreceived', 'failed', 'fail', 'error', 'relogin', 'lack_token', 'show_captcha', 'risk', 'forbidden', 'auth', 'network', 'timeout', 'http', 'protocol']);
+          const fields = ['state', 'signed_date', 'sign_date', 'is_signed', 'today_signed', 'description', 'notify_description', 'popup', 'coin', 'sign_in_exp', 'sign_in_coin', 'sign_in_streak'];
+          const hints = { risk: /风控|风险|异常行为|异常操作|安全限制/, captcha: /验证码|人机验证/, limited: /频繁|限制|稍后|重试|繁忙/, login: /登录|令牌|设备/, already: /已签到|已经签到|重复签到/, success: /签到成功|完成签到/, reward: /奖励|领取|到账/ };
+          
+          function object(value) {
+            return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
+          }
+          
+          function integer(value) {
+            if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d{1,13}$/.test(value))) return undefined;
+            const parsed = Number(value);
+            return Number.isSafeInteger(parsed) && parsed >= 0 && parsed < 10 ** 13 ? parsed : undefined;
+          }
+          
+          function state(value) {
+            return states.has(value) ? value : value === undefined ? 'missing' : 'unrecognized';
+          }
+          
+          export function safeSign(value) {
+            const data = object(value);
+            const reward = data.popup ? object(object(data.popup).data) : data;
+            const descriptions = [data.description, data.notify_description].filter(item => typeof item === 'string').join(' ').slice(0, 2000);
+            return {
+              type: value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value,
+              fields: fields.filter(key => Object.hasOwn(data, key)),
+              state: state(data.state),
+              stateType: typeof data.state,
+              signedDate: integer(data.signed_date),
+              signedDateType: typeof data.signed_date,
+              signDate: integer(data.sign_date),
+              isSigned: typeof data.is_signed === 'boolean' ? data.is_signed : undefined,
+              todaySigned: typeof data.today_signed === 'boolean' ? data.today_signed : undefined,
+              rewardExp: integer(reward.sign_in_exp),
+              rewardCoin: integer(reward.sign_in_coin),
+              streak: integer(reward.sign_in_streak),
+              hints: Object.keys(hints).filter(key => hints[key].test(descriptions)),
+            };
+          }
+          
+          
+          export function observeSignFetch(fetchImpl, emit = console.log) {
+            let traceCount = 0;
+            return async (input, options = {}) => {
+              const response = await fetchImpl(input, options);
+              try {
+                const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+                if (url.origin !== 'https://api.xiaoheihe.cn' || !['/task/sign_v3/sign', '/task/sign_v4/get_sign_state'].includes(url.pathname) || traceCount >= 12) return response;
+                traceCount++;
+                let body;
+                try { body = await response.clone().json(); } catch { body = {}; }
+                const api = object(body);
+                const message = typeof api.msg === 'string' ? api.msg.slice(0, 2000) : '';
+                const date = Date.parse(response.headers.get('date') || '');
+                emit('CLOUD_SIGN_RESPONSE=' + JSON.stringify({
+                  endpoint: url.pathname === '/task/sign_v3/sign' ? 'submit' : 'state',
+                  http: response.status,
+                  apiStatus: state(api.status),
+                  expectedDay: Math.floor((Date.now() + 8 * 3600_000) / 86400_000),
+                  serverDate: Number.isFinite(date) ? new Date(date).toISOString() : undefined,
+                  messageHints: Object.keys(hints).filter(key => hints[key].test(message)),
+                  result: safeSign(api.result),
+                }));
+              } catch {
+                // Observability must never change the business response or request outcome.
+              }
+              return response;
+            };
+          }
+          
+          globalThis.fetch = observeSignFetch(globalThis.fetch);
+          JS
+          node --import "$RUNNER_TEMP/heybox-sign-observer.mjs" heybox-cloud/entry.mjs
       - name: Send result email
         id: notify
         if: ${{ always() }}
